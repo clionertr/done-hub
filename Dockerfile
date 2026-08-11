@@ -5,6 +5,9 @@ WORKDIR /build
 COPY web/package.json .
 COPY web/yarn.lock .
 
+# arm64 QEMU 模拟构建时网络较慢，npmmirror 镜像易超时；
+# 加长网络超时并保留 GHA 构建缓存（第二次构建命中缓存不再下载）
+ENV YARN_NETWORK_TIMEOUT=600000
 RUN yarn --frozen-lockfile
 
 COPY ./web .
