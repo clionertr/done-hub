@@ -115,7 +115,9 @@ func runSearchAnthropic(ctx context.Context, query string) (string, error) {
 	body, err := json.Marshal(claude.ClaudeRequest{
 		Model:     sbConfig.model,
 		MaxTokens: 512,
-		Tools:     []claude.Tools{{Type: webSearchTool2025}},
+		// name 必须为 web_search：Anthropic 服务端搜索工具（web_search_20250305）的标准格式，
+		// 缺失 name 时网关（如 opencode go）会直接 400
+		Tools:     []claude.Tools{{Type: webSearchTool2025, Name: "web_search"}},
 		Messages:  []claude.Message{{Role: "user", Content: query}},
 	})
 	if err != nil {
@@ -226,12 +228,38 @@ func extractResultText(cr *claude.ClaudeResponse) string {
 				parts = append(parts, block.Text)
 			}
 		case "web_search_tool_result":
-			if text := anyToString(block.Content); text != "" {
+			if text := extractWebSearchResults(block.Content); text != "" {
 				parts = append(parts, text)
 			}
 		}
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// extractWebSearchResults 从 web_search_tool_result 块提取可读结果：
+// 元素是 web_search_result（title + url），或嵌套的 text。
+func extractWebSearchResults(content any) string {
+	switch v := content.(type) {
+	case string:
+		return v
+	case []any:
+		var lines []string
+		for _, item := range v {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			title, _ := m["title"].(string)
+			url, _ := m["url"].(string)
+			if title != "" || url != "" {
+				lines = append(lines, fmt.Sprintf("- %s %s", title, url))
+			} else if text, _ := m["text"].(string); text != "" {
+				lines = append(lines, text)
+			}
+		}
+		return strings.Join(lines, "\n")
+	}
+	return ""
 }
 
 // extractUserQuery 提取请求中最后一条用户消息的文本作为搜索 query。

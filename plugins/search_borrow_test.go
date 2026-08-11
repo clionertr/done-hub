@@ -25,6 +25,7 @@ func TestSearchBorrowHook(t *testing.T) {
 	var searchModel string
 	var searchTools []claude.Tools
 	var searchMessages []claude.Message
+	var searchToolName string
 
 	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/messages" {
@@ -35,6 +36,9 @@ func TestSearchBorrowHook(t *testing.T) {
 		searchModel = req.Model
 		searchTools = req.Tools
 		searchMessages = req.Messages
+		if len(req.Tools) > 0 {
+			searchToolName = req.Tools[0].Name
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(claude.ClaudeResponse{
 			Type:  "message",
@@ -79,6 +83,9 @@ func TestSearchBorrowHook(t *testing.T) {
 	}
 	if len(searchTools) != 1 || searchTools[0].Type != "web_search_20250305" {
 		t.Errorf("search tools = %+v, want web_search_20250305", searchTools)
+	}
+	if searchToolName != "web_search" {
+		t.Errorf("search tool name = %q, want web_search", searchToolName)
 	}
 	if len(searchMessages) != 1 || searchMessages[0].Content != "今天上海天气怎么样？" {
 		t.Errorf("search messages = %+v", searchMessages)
