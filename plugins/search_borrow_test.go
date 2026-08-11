@@ -117,3 +117,71 @@ func TestSearchBorrowSkipsNonTargetModel(t *testing.T) {
 		t.Errorf("flash model should not be touched, tools = %+v", req.Tools)
 	}
 }
+
+func TestSearchBorrowResponsesProtocol(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ginCtx.Request = httptest.NewRequest(http.MethodPost, "/claude/v1/messages", nil)
+
+	var gotModel string
+	var gotTools []any
+	var gotInput any
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		gotModel, _ = body["model"].(string)
+		gotTools, _ = body["tools"].([]any)
+		gotInput = body["input"]
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"output": []map[string]any{
+				{"type": "web_search_call", "status": "completed"},
+				{"type": "message", "content": []map[string]any{{"type": "output_text", "text": "上海今日受台风影响有暴雨。"}}},
+			},
+		})
+	}))
+	defer mock.Close()
+
+	saved := sbConfig
+	sbConfig = searchBorrowConfig{
+		enabled:  true,
+		baseURL:  mock.URL,
+		apiKey:   "test-key",
+		model:    "deepseek-v4-flash",
+		models:   []string{"deepseek-v4-pro"},
+		protocol: "responses",
+	}
+	defer func() { sbConfig = saved }()
+
+	req := &claude.ClaudeRequest{
+		Model: "deepseek-v4-pro",
+		Tools: []claude.Tools{{Type: "web_search_20250305"}},
+		Messages: []claude.Message{{Role: "user", Content: "上海天气？"}},
+	}
+	err := searchBorrowHook(&ClaudeRequestContext{Gin: ginCtx, Request: req, ModelName: "deepseek-v4-pro"})
+	if err != nil {
+		t.Fatalf("hook error: %v", err)
+	}
+
+	if gotModel != "deepseek-v4-flash" {
+		t.Errorf("responses model = %q", gotModel)
+	}
+	if len(gotTools) != 1 {
+		t.Errorf("responses tools = %+v, want web_search", gotTools)
+	} else if tm, ok := gotTools[0].(map[string]any); !ok || tm["type"] != "web_search" {
+		t.Errorf("responses tools[0] = %+v, want type=web_search", gotTools[0])
+	}
+	if gotInput != "上海天气？" {
+		t.Errorf("responses input = %v", gotInput)
+	}
+	if len(req.Tools) != 0 {
+		t.Errorf("req tools should be emptied, got %+v", req.Tools)
+	}
+	sys, ok := req.System.(string)
+	if !ok || !strings.Contains(sys, "上海今日受台风影响有暴雨") {
+		t.Errorf("system = %v, want injected search result", req.System)
+	}
+}

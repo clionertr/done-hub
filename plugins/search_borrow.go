@@ -25,12 +25,15 @@ const (
 //   - SEARCH_BORROW_API_KEY   搜索源 key
 //   - SEARCH_BORROW_MODEL     执行搜索的模型（建议 flash，如 deepseek-v4-flash）
 //   - SEARCH_BORROW_MODELS    需要借用搜索的目标模型，逗号分隔，默认 deepseek-v4-pro,deepseek-v4-pro[1m]
+//   - SEARCH_BORROW_PROTOCOL  搜索源协议：anthropic（默认，/v1/messages + web_search_20250305，适用 DeepSeek 官方）
+//                             或 responses（/v1/responses + web_search，适用 opencode go 等网关）
 type searchBorrowConfig struct {
 	enabled bool
 	baseURL string
 	apiKey  string
 	model   string
 	models  []string
+	protocol string
 	timeout time.Duration
 }
 
@@ -42,7 +45,11 @@ func init() {
 		baseURL: strings.TrimSuffix(os.Getenv("SEARCH_BORROW_BASE_URL"), "/"),
 		apiKey:  os.Getenv("SEARCH_BORROW_API_KEY"),
 		model:   os.Getenv("SEARCH_BORROW_MODEL"),
+		protocol: os.Getenv("SEARCH_BORROW_PROTOCOL"),
 		timeout: 30 * time.Second,
+	}
+	if sbConfig.protocol == "" {
+		sbConfig.protocol = "anthropic"
 	}
 	if models := os.Getenv("SEARCH_BORROW_MODELS"); models != "" {
 		for _, m := range strings.Split(models, ",") {
@@ -93,9 +100,18 @@ func searchBorrowHook(ctx *ClaudeRequestContext) error {
 	return nil
 }
 
-// runSearch 向搜索源发送 Anthropic 格式搜索请求（web_search_20250305 服务端工具），
+// runSearch 按配置的协议向搜索源发送搜索请求，
 // 返回提取后的结果文本。
 func runSearch(ctx context.Context, query string) (string, error) {
+	if sbConfig.protocol == "responses" {
+		return runSearchResponses(ctx, query)
+	}
+	return runSearchAnthropic(ctx, query)
+}
+
+// runSearchAnthropic 向搜索源发送 Anthropic 格式搜索请求（web_search_20250305 服务端工具），
+// 适用于 DeepSeek 官方 api.deepseek.com/anthropic 等端点。
+func runSearchAnthropic(ctx context.Context, query string) (string, error) {
 	body, err := json.Marshal(claude.ClaudeRequest{
 		Model:     sbConfig.model,
 		MaxTokens: 512,
@@ -134,6 +150,70 @@ func runSearch(ctx context.Context, query string) (string, error) {
 		return "", err
 	}
 	return extractResultText(&cr), nil
+}
+
+// runSearchResponses 向搜索源发送 OpenAI Responses 格式搜索请求（web_search 工具），
+// 适用于 opencode go（opencode.ai/zen/go）等支持原生 web_search 的网关。
+func runSearchResponses(ctx context.Context, query string) (string, error) {
+	body, err := json.Marshal(map[string]any{
+		"model": sbConfig.model,
+		"tools": []map[string]any{{"type": "web_search"}},
+		"input": query,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, sbConfig.baseURL+"/v1/responses", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+sbConfig.apiKey)
+
+	client := &http.Client{Timeout: sbConfig.timeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("search source returned %d: %s", resp.StatusCode, truncate(string(respBody), 300))
+	}
+
+	var cr struct {
+		Output []struct {
+			Type    string `json:"type"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"output"`
+	}
+	if err := json.Unmarshal(respBody, &cr); err != nil {
+		return "", err
+	}
+
+	var parts []string
+	for _, o := range cr.Output {
+		if o.Type != "message" {
+			continue
+		}
+		for _, c := range o.Content {
+			if c.Type == "output_text" && c.Text != "" {
+				parts = append(parts, c.Text)
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("search source returned no text output")
+	}
+	return strings.Join(parts, "\n\n"), nil
 }
 
 // extractResultText 从搜索源响应中提取文本：text 块与 web_search_tool_result 块的 content。
