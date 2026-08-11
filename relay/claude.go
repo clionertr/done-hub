@@ -81,12 +81,7 @@ func (r *relayClaudeOnly) send() (err *types.OpenAIErrorWithStatusCode, done boo
 	channelType := r.provider.GetChannel().Type
 
 	if channelType == config.ChannelTypeCustom {
-		// flash 模型走 Anthropic 原生透传：请求/响应不做 OpenAI 转换，
-		// 直接发给上游 /v1/messages（OpenCode Go 等网关原生支持 flash）。
-		// 其余模型（如 pro）继续走 Claude->OpenAI->Claude 转换。
-		if model_utils.ContainsCaseInsensitive(r.modelName, "flash") {
-			return r.sendClaudeNative()
-		}
+
 		return r.sendCustomChannelWithClaudeFormat()
 	}
 
@@ -153,84 +148,6 @@ func (r *relayClaudeOnly) send() (err *types.OpenAIErrorWithStatusCode, done boo
 
 		if openErr != nil {
 			err = openErr
-		}
-	}
-
-	if err != nil {
-		done = true
-	}
-	return
-}
-
-// sendClaudeNative 以 Anthropic 原生协议直连上游 /v1/messages。
-// 仅用于自定义渠道的 flash 模型：格式不转换，响应原样透传，
-// 计费 usage 从上游响应解析后同步回 relay provider。
-func (r *relayClaudeOnly) sendClaudeNative() (err *types.OpenAIErrorWithStatusCode, done bool) {
-	channel := r.provider.GetChannel()
-	claudeProvider, ok := claude.ClaudeProviderFactory{}.Create(channel).(claude.ClaudeChatInterface)
-	if !ok {
-		logger.SysError(fmt.Sprintf("[Claude Relay] Provider 不支持 Claude 接口，Provider 类型: %T", r.provider))
-		err = common.StringErrorWrapperLocal("channel not implemented", "channel_error", http.StatusServiceUnavailable)
-		done = true
-		return
-	}
-	claudeProvider.SetContext(r.c)
-
-	r.claudeRequest.Model = r.modelName
-
-	// 内容审查
-	if safetyErr := r.performContentSafety(); safetyErr != nil {
-		err = safetyErr
-		done = true
-		return
-	}
-
-	if r.claudeRequest.Stream {
-		var response requester.StreamReaderInterface[string]
-		response, err = claudeProvider.CreateClaudeChatStream(r.claudeRequest)
-		if err != nil {
-			done = true
-			return
-		}
-
-		if r.heartbeat != nil {
-			r.heartbeat.Stop()
-		}
-
-		doneStr := func() string {
-			return ""
-		}
-		firstResponseTime := responseGeneralStreamClient(r.c, response, doneStr)
-		r.SetFirstResponseTime(firstResponseTime)
-	} else {
-		var response *claude.ClaudeResponse
-		response, err = claudeProvider.CreateClaudeChat(r.claudeRequest)
-		if err != nil {
-			done = true
-			return
-		}
-
-		if r.heartbeat != nil {
-			r.heartbeat.Stop()
-		}
-
-		openErr := responseJsonClient(r.c, response)
-		if openErr != nil {
-			err = openErr
-		}
-	}
-
-	// 同步上游 usage：输入 token 已由 RelayHandler 预填到 relay provider，
-	// 这里把 ClaudeProvider 解析出的输出 token 与文本累计补回，保证计费准确。
-	if err == nil {
-		if relayUsage := r.provider.GetUsage(); relayUsage != nil {
-			if upstreamUsage := claudeProvider.GetUsage(); upstreamUsage != nil {
-				relayUsage.CompletionTokens = upstreamUsage.CompletionTokens
-				relayUsage.TotalTokens = relayUsage.PromptTokens + upstreamUsage.CompletionTokens
-				if upstreamUsage.TextBuilder.Len() > 0 {
-					relayUsage.TextBuilder.WriteString(upstreamUsage.TextBuilder.String())
-				}
-			}
 		}
 	}
 
