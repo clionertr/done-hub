@@ -12,6 +12,12 @@ permissions:
   contents: read
   packages: write
 
+# 同一分支同时只允许一个构建：连续 push 时旧构建自动取消，
+# 避免多个构建并发推送 GHCR 触发次级速率限制
+concurrency:
+  group: build-docker-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
