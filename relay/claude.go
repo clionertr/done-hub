@@ -8,6 +8,7 @@ import (
 	"done-hub/common/model_utils"
 	"done-hub/common/requester"
 	"done-hub/common/utils"
+	"done-hub/plugins"
 	"done-hub/providers/antigravity"
 	"done-hub/providers/claude"
 	"done-hub/providers/gemini"
@@ -76,6 +77,13 @@ func (r *relayClaudeOnly) send() (err *types.OpenAIErrorWithStatusCode, done boo
 
 	// 应用 Claude Thinking 约束校验（tool_choice 冲突检测 + max_tokens 自动调整）
 	r.applyClaudeThinkingConstraints()
+
+	// 执行插件钩子：允许插件修改请求（如搜索借用），修改结果作用于后续转发
+	plugins.ProcessClaudeRequest(&plugins.ClaudeRequestContext{
+		Gin:       r.c,
+		Request:   r.claudeRequest,
+		ModelName: r.modelName,
+	})
 
 	// 检查是否为自定义渠道，如果是则使用Claude->OpenAI->Claude的转换逻辑
 	channelType := r.provider.GetChannel().Type
