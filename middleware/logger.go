@@ -58,7 +58,7 @@ func GinzapWithConfig() gin.HandlerFunc {
 			zap.Int("channel_id", c.GetInt("channel_id")),
 		}
 
-		if len(c.Errors) > 0 {
+		if len(c.Errors) > 0 || c.Writer.Status() >= 400 {
 			// Append error field if this is an erroneous request.
 			for _, e := range c.Errors.Errors() {
 				logger.Logger.Error(e, fields...)
