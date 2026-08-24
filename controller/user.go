@@ -407,8 +407,6 @@ func GetUser(c *gin.Context) {
 	})
 }
 
-const API_LIMIT_KEY = "api-limiter:%d"
-
 func GetRateRealtime(c *gin.Context) {
 	id := c.GetInt("id")
 	user, err := model.GetUserById(id, false)
@@ -419,10 +417,9 @@ func GetRateRealtime(c *gin.Context) {
 		})
 		return
 	}
-	limiter := model.GlobalUserGroupRatio.GetAPILimiter(user.Group)
-	key := fmt.Sprintf(API_LIMIT_KEY, id)
-	// 获取当前已使用的速率
-	rpm, err := limiter.GetCurrentRate(key)
+
+	// 与 /panel/analytics 实时流量同一口径：logs 表最近60秒滑动窗口，仅统计消费日志
+	rpmTpmStats, err := model.GetRpmTpmStatistics(id)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -430,17 +427,22 @@ func GetRateRealtime(c *gin.Context) {
 		})
 		return
 	}
-	maxRPM := limit.GetMaxRate(limiter)
+
+	// maxRPM 仍取自分组限流配置，仅用于展示使用率
+	maxRPM := 0
+	if limiter := model.GlobalUserGroupRatio.GetAPILimiter(user.Group); limiter != nil {
+		maxRPM = limit.GetMaxRate(limiter)
+	}
 	var usageRpmRate float64 = 0
 	if maxRPM > 0 {
-		usageRpmRate = math.Floor(float64(rpm)/float64(maxRPM)*100*100) / 100
+		usageRpmRate = math.Floor(float64(rpmTpmStats.RPM)/float64(maxRPM)*100*100) / 100
 	}
 
 	data := map[string]interface{}{
-		"rpm":          rpm,
+		"rpm":          rpmTpmStats.RPM,
 		"maxRPM":       maxRPM,
 		"usageRpmRate": usageRpmRate,
-		"tpm":          0,
+		"tpm":          rpmTpmStats.TPM,
 		"maxTPM":       0,
 		"usageTpmRate": 0,
 	}
