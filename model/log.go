@@ -518,7 +518,9 @@ type RpmTpmStatistics struct {
 	PPM float64 `json:"ppm"` // Profit Per Minute (美元)：每分钟利润 = (收入 - 成本) / QuotaPerUnit
 }
 
-func GetRpmTpmStatistics() (*RpmTpmStatistics, error) {
+// GetRpmTpmStatistics 统计最近60秒的实时流量（滑动窗口，仅消费日志）。
+// userId 为 0 时统计全站，否则仅统计该用户。
+func GetRpmTpmStatistics(userId int) (*RpmTpmStatistics, error) {
 	var result struct {
 		RPM        int64 `gorm:"column:rpm"`
 		TPM        int64 `gorm:"column:tpm"`
@@ -530,10 +532,14 @@ func GetRpmTpmStatistics() (*RpmTpmStatistics, error) {
 	now := time.Now().Unix()
 	startTime := now - 60
 
-	err := DB.Table("logs").
+	query := DB.Table("logs").
 		Select("COUNT(*) as rpm, COALESCE(SUM(prompt_tokens + completion_tokens), 0) as tpm, COALESCE(SUM(quota), 0) as total_quota, COALESCE(SUM(cost_quota), 0) as cost_quota").
-		Where("type = ? AND created_at >= ?", LogTypeConsume, startTime).
-		Scan(&result).Error
+		Where("type = ? AND created_at >= ?", LogTypeConsume, startTime)
+	if userId != 0 {
+		query = query.Where("user_id = ?", userId)
+	}
+
+	err := query.Scan(&result).Error
 
 	if err != nil {
 		return nil, err

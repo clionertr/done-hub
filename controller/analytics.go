@@ -112,7 +112,7 @@ func GetStatisticsDetail(c *gin.Context) {
 	}
 
 	// 获取最近60秒的RPM和TPM统计
-	rpmTpmStats, err := model.GetRpmTpmStatistics()
+	rpmTpmStats, err := model.GetRpmTpmStatistics(0)
 	if err == nil {
 		statisticsDetail.RpmTpmStatistics = &RpmTpmStatistics{
 			RPM: rpmTpmStats.RPM,
@@ -131,7 +131,7 @@ func GetStatisticsDetail(c *gin.Context) {
 
 // GetRpmTpmDetail 仅返回最近60秒的实时流量统计（RPM/TPM/CPM/PPM），供实时流量卡片自动刷新使用
 func GetRpmTpmDetail(c *gin.Context) {
-	rpmTpmStats, err := model.GetRpmTpmStatistics()
+	rpmTpmStats, err := model.GetRpmTpmStatistics(0)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,

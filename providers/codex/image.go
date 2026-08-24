@@ -138,6 +138,7 @@ func (p *CodexProvider) CreateImageEdits(request *types.ImageEditRequest) (*type
 		tool.N = &n
 	}
 	tool.Size = strings.TrimSpace(request.Size)
+	tool.Quality = strings.TrimSpace(request.Quality)
 
 	body, err := json.Marshal(buildImagesRequestBody(imageToolActionEdit, prompt, tool, inputImages, maskURL))
 	if err != nil {
@@ -145,8 +146,9 @@ func (p *CodexProvider) CreateImageEdits(request *types.ImageEditRequest) (*type
 	}
 
 	return p.executeImagesResponses(body, request.ResponseFormat, imagesUsageFallback{
-		Model: request.Model,
-		Size:  request.Size,
+		Model:   request.Model,
+		Quality: request.Quality,
+		Size:    request.Size,
 	})
 }
 

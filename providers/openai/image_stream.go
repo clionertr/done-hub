@@ -293,14 +293,14 @@ func (p *OpenAIProvider) CreateImageEditsStream(request *types.ImageEditRequest)
 
 	// 聚合上游可能无视 stream 参数返回 JSON 200，此时不能按 SSE 逐行解析
 	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		// ImageEditRequest 无 quality 字段，兜底档位依赖响应回显，缺失时回落请求 size
-		return p.imageJSONToStream(resp, ImageEditStreamPrefix, request.Model, "", request.Size)
+		return p.imageJSONToStream(resp, ImageEditStreamPrefix, request.Model, request.Quality, request.Size)
 	}
 
 	handler := OpenAIImageStreamHandler{
-		Usage:   p.Usage,
-		Model:   request.Model,
-		ReqSize: request.Size,
+		Usage:      p.Usage,
+		Model:      request.Model,
+		ReqQuality: request.Quality,
+		ReqSize:    request.Size,
 	}
 
 	return requester.RequestNoTrimStream(p.Requester, resp, handler.HandlerImageStream)
