@@ -67,12 +67,26 @@ func (f CodexProviderFactory) Create(channel *model.Channel) base.ProviderInterf
 	return provider
 }
 
-// parseCodexConfig 解析 Codex 配置
-// 支持两种输入格式：
+// parseCodexConfig 解析 Codex 配置：先读插件参数，再解析 Key。
+// Key 支持两种输入格式：
 // 1. 完整的 JSON 格式（包含 access_token, refresh_token 等）- 支持自动刷新
 // 2. 纯文本格式（直接输入 access_token）- 不支持自动刷新，但更简单
 func parseCodexConfig(provider *CodexProvider) {
 	channel := provider.Channel
+
+	// 插件参数：图像编排模型覆盖（上游按套餐下线旧编排模型时无需改代码）
+	mainModel := imagesResponsesMainModel
+	if channel.Plugin != nil {
+		plugin := channel.Plugin.Data()
+		if codexConfig, ok := plugin["codex"]; ok {
+			if m, ok := codexConfig["images_main_model"].(string); ok {
+				if m = strings.TrimSpace(m); m != "" {
+					mainModel = m
+				}
+			}
+		}
+	}
+	provider.ImagesMainModel = mainModel
 
 	if channel.Key == "" {
 		return
@@ -115,7 +129,8 @@ func parseCodexConfig(provider *CodexProvider) {
 
 type CodexProvider struct {
 	openai.OpenAIProvider
-	Credentials *OAuth2Credentials // OAuth2 凭证（包含 refresh_token）
+	Credentials     *OAuth2Credentials // OAuth2 凭证（包含 refresh_token）
+	ImagesMainModel string             // 图像请求的 Responses 编排模型，parseCodexConfig 已填默认值
 }
 
 func getConfig() base.ProviderConfig {

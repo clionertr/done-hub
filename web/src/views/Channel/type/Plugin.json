@@ -330,5 +330,19 @@
         }
       }
     }
+  },
+  "59": {
+    "codex": {
+      "name": "Codex 设置",
+      "description": "Codex 渠道专属配置",
+      "params": {
+        "images_main_model": {
+          "name": "图像编排模型",
+          "description": "生图请求使用的 Responses 编排模型（非图像模型本身），留空使用默认 gpt-5.6-luna；上游下线默认模型时可在此切换为账号支持的文本模型",
+          "type": "string",
+          "required": false
+        }
+      }
+    }
   }
 }

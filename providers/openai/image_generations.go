@@ -30,7 +30,11 @@ func rawMessageToString(raw json.RawMessage) string {
 // 组合下的 output_tokens 数（OpenAI 官方公式，来源 https://platform.openai.com/docs/guides/images）。
 // 上游漏返 usage 时按这张表兜底，避免老的 imageCount*258 常数严重低估高 quality 大图的计费。
 //
-// quality 取值：low / medium / high / auto（auto 等价 medium）；空字符串等价 auto。
+// quality 取值：low / medium / high / xhigh / max / auto（auto 等价 medium）；空字符串等价 auto。
+// xhigh / max 为 gpt-image-2.5 新增档位，官方未公布 token 公式，1024x1024 取第三方实测值
+// （xhigh≈3122、max≈7024），矩形尺寸按既有行的 1.5x 比例外推。
+// 注意 xhigh(3122) < high(4160) 属预期而非 bug：low/medium/high 行是 gpt-image-1 的官方值，
+// xhigh/max 是 gpt-image-2.5 的实测值，两代模型 token 尺度不同；表按 quality 而非 model 分档。
 // size 取值：1024x1024 / 1024x1536 / 1536x1024；空字符串或不在表内时按 1024x1024 估算。
 func GPTImageOutputTokens(quality, size string) int {
 	q := strings.ToLower(strings.TrimSpace(quality))
@@ -57,6 +61,16 @@ func GPTImageOutputTokens(quality, size string) int {
 			"1024x1024": 4160,
 			"1024x1536": 6240,
 			"1536x1024": 6208,
+		},
+		"xhigh": {
+			"1024x1024": 3122,
+			"1024x1536": 4683,
+			"1536x1024": 4683,
+		},
+		"max": {
+			"1024x1024": 7024,
+			"1024x1536": 10536,
+			"1536x1024": 10536,
 		},
 	}
 
