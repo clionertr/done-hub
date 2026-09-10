@@ -41,6 +41,20 @@ var defaultExtraServicePrices = ExtraServicePriceConfig{
 			"1024x1536": 0.25,
 			"1536x1024": 0.25,
 		},
+		// xhigh / max 为 gpt-image-2.5 新增档位，按 $30/M 输出 token 费率 × 第三方实测
+		// token 数折算（1024x1024: xhigh≈3122、max≈7024），矩形尺寸按 1.5x 外推。
+		// 注意 xhigh($0.094) < high($0.167) 属预期而非 bug：low/medium/high 行按 gpt-image-1
+		// 的官方值（输出 $40/M）折算，两代模型 token 尺度与费率不同；表按 quality 而非 model 分档。
+		"xhigh": {
+			"1024x1024": 0.094,
+			"1024x1536": 0.141,
+			"1536x1024": 0.141,
+		},
+		"max": {
+			"1024x1024": 0.211,
+			"1024x1536": 0.316,
+			"1536x1024": 0.316,
+		},
 	},
 }
 
