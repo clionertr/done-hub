@@ -564,24 +564,64 @@ type GeminiChatSafetyRating struct {
 }
 
 // GroundingMetadata 相关结构定义
+// GroundingChunks/GroundingSupports 等复合字段用 json.RawMessage 无损透传，
+// 上游新增的 chunk 类型（maps/retrievedContext 等）不会在反序列化时被丢弃
 type GeminiGroundingMetadata struct {
-	SearchEntryPoint  *GeminiSearchEntryPoint  `json:"searchEntryPoint,omitempty"`
-	GroundingChunks   []GeminiGroundingChunk   `json:"groundingChunks,omitempty"`
-	GroundingSupports []GeminiGroundingSupport `json:"groundingSupports,omitempty"`
-	WebSearchQueries  []string                 `json:"webSearchQueries,omitempty"`
+	SearchEntryPoint             json.RawMessage `json:"searchEntryPoint,omitempty"`
+	GroundingChunks              json.RawMessage `json:"groundingChunks,omitempty"`
+	GroundingSupports            json.RawMessage `json:"groundingSupports,omitempty"`
+	WebSearchQueries             []string        `json:"webSearchQueries,omitempty"`
+	RetrievalQueries             []string        `json:"retrievalQueries,omitempty"`
+	RetrievalMetadata            json.RawMessage `json:"retrievalMetadata,omitempty"`
+	SourceFlaggingUris           json.RawMessage `json:"sourceFlaggingUris,omitempty"`
+	GoogleMapsWidgetContextToken string          `json:"googleMapsWidgetContextToken,omitempty"`
 }
 
-type GeminiSearchEntryPoint struct {
-	RenderedContent string `json:"renderedContent,omitempty"`
-}
-
+// GeminiGroundingChunk 仅用于内部解码 GroundingChunks，转换 annotation/markdown 时使用
 type GeminiGroundingChunk struct {
-	Web *GeminiWebChunk `json:"web,omitempty"`
+	Web              *GeminiGroundingSource `json:"web,omitempty"`
+	RetrievedContext *GeminiGroundingSource `json:"retrievedContext,omitempty"`
+	Maps             *GeminiGroundingSource `json:"maps,omitempty"`
 }
 
-type GeminiWebChunk struct {
+// Source 返回 chunk 的引用来源，按 web > retrievedContext > maps 优先
+func (c *GeminiGroundingChunk) Source() *GeminiGroundingSource {
+	if c.Web != nil {
+		return c.Web
+	}
+	if c.RetrievedContext != nil {
+		return c.RetrievedContext
+	}
+	return c.Maps
+}
+
+type GeminiGroundingSource struct {
 	Uri   string `json:"uri,omitempty"`
 	Title string `json:"title,omitempty"`
+}
+
+// DecodeGroundingChunks 解码 GroundingChunks，失败或为空时返回 nil
+func (m *GeminiGroundingMetadata) DecodeGroundingChunks() []GeminiGroundingChunk {
+	if m == nil || len(m.GroundingChunks) == 0 {
+		return nil
+	}
+	var chunks []GeminiGroundingChunk
+	if err := json.Unmarshal(m.GroundingChunks, &chunks); err != nil {
+		return nil
+	}
+	return chunks
+}
+
+// DecodeGroundingSupports 解码 GroundingSupports，失败或为空时返回 nil
+func (m *GeminiGroundingMetadata) DecodeGroundingSupports() []GeminiGroundingSupport {
+	if m == nil || len(m.GroundingSupports) == 0 {
+		return nil
+	}
+	var supports []GeminiGroundingSupport
+	if err := json.Unmarshal(m.GroundingSupports, &supports); err != nil {
+		return nil
+	}
+	return supports
 }
 
 type GeminiGroundingSupport struct {
@@ -597,7 +637,9 @@ type GeminiGroundingSegment struct {
 
 // ConvertGroundingToAnnotations 将 Gemini GroundingMetadata 转换为 OpenAI Annotations 格式
 func (candidate *GeminiChatCandidate) ConvertGroundingToAnnotations() []types.Annotations {
-	if candidate.GroundingMetadata == nil || len(candidate.GroundingMetadata.GroundingSupports) == 0 {
+	supports := candidate.GroundingMetadata.DecodeGroundingSupports()
+	chunks := candidate.GroundingMetadata.DecodeGroundingChunks()
+	if len(supports) == 0 || len(chunks) == 0 {
 		return nil
 	}
 
@@ -606,23 +648,23 @@ func (candidate *GeminiChatCandidate) ConvertGroundingToAnnotations() []types.An
 	seenAnnotations := make(map[string]bool)
 
 	// 遍历 GroundingSupports，为每个支持的文本段创建引用
-	for _, support := range candidate.GroundingMetadata.GroundingSupports {
+	for _, support := range supports {
 		if support.Segment == nil || len(support.GroundingChunkIndices) == 0 {
 			continue
 		}
 
 		// 为每个引用的 chunk 创建 annotation
 		for _, chunkIndex := range support.GroundingChunkIndices {
-			if chunkIndex >= 0 && chunkIndex < len(candidate.GroundingMetadata.GroundingChunks) {
-				chunk := candidate.GroundingMetadata.GroundingChunks[chunkIndex]
-				if chunk.Web != nil && chunk.Web.Uri != "" {
+			if chunkIndex >= 0 && chunkIndex < len(chunks) {
+				source := chunks[chunkIndex].Source()
+				if source != nil && source.Uri != "" {
 					// 创建唯一键来去重
-					key := fmt.Sprintf("%s_%d_%d", chunk.Web.Uri, support.Segment.StartIndex, support.Segment.EndIndex)
+					key := fmt.Sprintf("%s_%d_%d", source.Uri, support.Segment.StartIndex, support.Segment.EndIndex)
 					if !seenAnnotations[key] {
 						annotation := types.Annotations{
 							Type:       "url_citation",
-							Url:        chunk.Web.Uri,
-							Title:      chunk.Web.Title,
+							Url:        source.Uri,
+							Title:      source.Title,
 							StartIndex: support.Segment.StartIndex,
 							EndIndex:   support.Segment.EndIndex,
 						}
@@ -1020,7 +1062,8 @@ func showGoogleSearchMeta(request *types.ChatCompletionRequest) bool {
 
 // formats grounding metadata as markdown citation
 func formatGroundingMetadataAsMarkdown(metadata *GeminiGroundingMetadata) string {
-	if metadata == nil || len(metadata.GroundingChunks) == 0 {
+	chunks := metadata.DecodeGroundingChunks()
+	if len(chunks) == 0 {
 		return ""
 	}
 	var result strings.Builder
@@ -1037,14 +1080,15 @@ func formatGroundingMetadataAsMarkdown(metadata *GeminiGroundingMetadata) string
 	}
 	// Add grounding chunks as numbered list
 	linkCount := 0
-	for _, chunk := range metadata.GroundingChunks {
-		if chunk.Web != nil && chunk.Web.Uri != "" {
+	for _, chunk := range chunks {
+		source := chunk.Source()
+		if source != nil && source.Uri != "" {
 			linkCount++
-			title := chunk.Web.Title
+			title := source.Title
 			if title == "" {
-				title = chunk.Web.Uri
+				title = source.Uri
 			}
-			result.WriteString(fmt.Sprintf("> %d. [%s](%s)\n", linkCount, title, chunk.Web.Uri))
+			result.WriteString(fmt.Sprintf("> %d. [%s](%s)\n", linkCount, title, source.Uri))
 		}
 	}
 	return result.String()
